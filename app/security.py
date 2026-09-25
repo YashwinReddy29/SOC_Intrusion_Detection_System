@@ -46,9 +46,7 @@ class InMemoryRateLimiter:
 class RedisRateLimiter:
     """Atomic Redis sliding-window limiter shared by all application replicas."""
 
-    _SCRIPT = redis.client.Script(
-        None,
-        """
+    _SCRIPT = """
 local t = redis.call('TIME')
 local now = tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
 local window = tonumber(ARGV[1])
@@ -73,8 +71,7 @@ if allowed == 0 and #first > 0 then
 end
 
 return {allowed, retry}
-""",
-    )
+"""
 
     def __init__(self, redis_url: str, limit: int = 300, window_seconds: int = 60) -> None:
         self.limit = max(1, int(limit))
@@ -96,7 +93,7 @@ return {allowed, retry}
     def allow(self, key: str) -> bool:
         member = secrets.token_hex(16)
         allowed, retry = self.client.eval(
-            self._SCRIPT.script,
+            self._SCRIPT,
             1,
             self._redis_key(key),
             self.window_seconds * 1000,
