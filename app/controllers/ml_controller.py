@@ -107,9 +107,7 @@ def ingest_event():
             "schema_version": "1",
             "event": event,
         }
-        try:
-            EventProducer(_kafka_settings()).publish(envelope)
-        except Exception as exc:
+        try:\n            producer = current_app.extensions.get("event_producer")\n            if producer is None:\n                producer = EventProducer(_kafka_settings())\n            producer.publish(envelope)\n        except Exception as exc:
             from app.models.database import fail_event
 
             fail_event(event_id, f"Kafka publish failed: {exc}")
