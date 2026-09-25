@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from threading import RLock
 from time import perf_counter
 
 import pandas as pd
@@ -39,6 +40,7 @@ class DetectionService:
         self.extractor = RollingFeatureExtractor(window_seconds=300)
         self.extractor.time_mean = float(stats.get("time_mean", 12.0))
         self.extractor.time_std = float(stats.get("time_std", 4.0)) or 1.0
+        self._lock = RLock()
 
     @staticmethod
     def validate_event(event: dict) -> None:
@@ -94,10 +96,7 @@ class DetectionService:
         start = perf_counter()
         self.validate_event(event)
 
-        features = self.extractor.transform_event(event)
-        frame = pd.DataFrame([features], columns=FEATURE_COLUMNS)
-        scores, predictions = self.model.predict_scores(frame)
-
+        # The rolling extractor is stateful. Serialize feature-state mutation so\n        # concurrent HTTP/greenlet requests cannot corrupt or reorder the window.\n        with self._lock:\n            features = self.extractor.transform_event(event)\n            frame = pd.DataFrame([features], columns=FEATURE_COLUMNS)\n            scores, predictions = self.model.predict_scores(frame)\n
         anomaly_score = float(scores[0])
         detected = bool(predictions[0])
         risk = score_risk(anomaly_score, features)
