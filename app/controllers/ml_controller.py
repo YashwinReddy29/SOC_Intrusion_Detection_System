@@ -1,25 +1,24 @@
-"""Event-driven ML ingestion and real-time Socket.IO alerts."""
+"""Event-driven ML ingestion with direct and Kafka-backed modes."""
 
 from __future__ import annotations
 
-from flask import Blueprint, current_app, g, jsonify, request
-from app.models.database import insert_log
-from app.services.threat_service import threat_score
-from app import socketio
-from app.security import valid_api_key
+import uuid
 
+from flask import Blueprint, current_app, g, jsonify, request
+
+from app.messaging.kafka import EventProducer, KafkaSettings
+from app.models.database import create_event, get_event, get_incidents
+from app.security import valid_api_key
+from app.services.event_processing import process_event
 from ml.detection_service import DetectionService
 
 
 ml_bp = Blueprint("ml", __name__, url_prefix="/api/ml")
-
-# Load the persisted model once when the application imports this controller.
 ARTIFACT_PATH = "ml/models/isolation_forest.joblib"
 detector = DetectionService(ARTIFACT_PATH)
 
 
 def _error(message: str, status_code: int):
-    """Return a consistent API error payload with request correlation."""
     return jsonify(
         {
             "error": message,
@@ -28,22 +27,33 @@ def _error(message: str, status_code: int):
     ), status_code
 
 
+def _kafka_settings() -> KafkaSettings:
+    bootstrap = current_app.config.get("KAFKA_BOOTSTRAP_SERVERS")
+    if not bootstrap:
+        raise RuntimeError("Kafka is not configured")
+    return KafkaSettings(
+        bootstrap_servers=bootstrap,
+        event_topic=current_app.config["KAFKA_EVENT_TOPIC"],
+        dlq_topic=current_app.config["KAFKA_DLQ_TOPIC"],
+        consumer_group=current_app.config["KAFKA_CONSUMER_GROUP"],
+    )
+
+
 @ml_bp.route("/health", methods=["GET"])
 def ml_health():
-    """Return detector readiness and model metadata."""
     return jsonify(
         {
             "status": "ready",
             "model_version": detector.model.VERSION,
             "threshold": detector.model.threshold,
             "features": detector.model.feature_columns,
+            "ingest_mode": current_app.config.get("EVENT_INGEST_MODE", "direct"),
         }
     )
 
 
 @ml_bp.route("/events", methods=["POST"])
 def ingest_event():
-    """Score one SOC event and emit the result immediately."""
     expected_key = current_app.config.get("ML_API_KEY")
     if not valid_api_key(request.headers.get("X-API-Key"), expected_key):
         return _error("Unauthorized", 401)
@@ -53,45 +63,98 @@ def ingest_event():
         return _error("Request body must be a JSON object", 400)
 
     try:
-        result = detector.analyze(event)
+        detector.validate_event(event)
     except (ValueError, TypeError, KeyError) as exc:
         return _error(str(exc), 400)
+
+    event_id = (
+        request.headers.get("Idempotency-Key")
+        or event.pop("event_id", None)
+        or uuid.uuid4().hex
+    )
+    event_id = str(event_id).strip()
+    if not event_id or len(event_id) > 64:
+        return _error("event_id / Idempotency-Key must contain 1-64 characters", 400)
+
+    created = create_event(
+        event_id=event_id,
+        event_payload=event,
+        source_ip=str(event["source_ip"]),
+        schema_version="1",
+    )
+
+    if not created:
+        existing = get_event(event_id)
+        if existing is None:
+            return _error("Duplicate event could not be loaded", 409)
+        status = existing.get("status")
+        code = 200 if status == "processed" else 202
+        return jsonify(
+            {
+                "event_id": event_id,
+                "status": status,
+                "deduplicated": True,
+                "detection": existing.get("detection_payload"),
+                "model_version": existing.get("model_version"),
+            }
+        ), code
+
+    ingest_mode = current_app.config.get("EVENT_INGEST_MODE", "direct")
+
+    if ingest_mode == "kafka":
+        envelope = {
+            "event_id": event_id,
+            "schema_version": "1",
+            "event": event,
+        }
+        try:
+            EventProducer(_kafka_settings()).publish(envelope)
+        except Exception as exc:
+            from app.models.database import fail_event
+
+            fail_event(event_id, f"Kafka publish failed: {exc}")
+            return _error("Event queue unavailable", 503)
+
+        return jsonify(
+            {
+                "event_id": event_id,
+                "status": "received",
+                "queued": True,
+            }
+        ), 202
+
+    try:
+        payload = process_event(event_id, event, detector)
     except Exception:
         return _error("Detection service failure", 500)
 
-    ip = str(event["source_ip"])
-    try:
-        threat = int(threat_score(ip))
-    except Exception:
-        threat = 0
-
-    message = (
-        f"ML {result.severity}: anomaly={result.anomaly_score:.4f} "
-        f"risk={result.risk_score:.1f} source={ip}"
-    )
-    insert_log(message, int(round(result.risk_score)), threat)
-
-    payload = {
-        "event": event,
-        "detection": result.to_dict(),
-        "model_version": detector.model.VERSION,
-        "threshold": detector.model.threshold,
-    }
-
-    # Emit after scoring and persistence so connected dashboards receive the
-    # same result returned to the event producer.
-    socketio.emit("detection_event", payload)
-
-    if result.detected:
-        socketio.emit(
-            "new_alert",
-            {
-                "message": message,
-                "severity": result.severity,
-                "risk_score": result.risk_score,
-                "source_ip": ip,
-                "latency_ms": result.latency_ms,
-            },
-        )
-
     return jsonify(payload), 200
+
+
+@ml_bp.route("/events/<event_id>", methods=["GET"])
+def event_status(event_id: str):
+    expected_key = current_app.config.get("ML_API_KEY")
+    if not valid_api_key(request.headers.get("X-API-Key"), expected_key):
+        return _error("Unauthorized", 401)
+
+    event = get_event(event_id)
+    if event is None:
+        return _error("Event not found", 404)
+
+    # Datetimes are converted by Flask's JSON provider.
+    return jsonify(event)
+
+
+@ml_bp.route("/incidents", methods=["GET"])
+def incidents():
+    expected_key = current_app.config.get("ML_API_KEY")
+    if not valid_api_key(request.headers.get("X-API-Key"), expected_key):
+        return _error("Unauthorized", 401)
+
+    raw_limit = request.args.get("limit", "100")
+    try:
+        limit = int(raw_limit)
+    except ValueError:
+        return _error("limit must be an integer", 400)
+
+    return jsonify({"incidents": get_incidents(limit)})
