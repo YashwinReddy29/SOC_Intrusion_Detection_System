@@ -26,6 +26,11 @@ class Settings:
     ml_rate_window_seconds: int
     trust_proxy_headers: bool
     log_level: str
+    event_ingest_mode: str
+    kafka_bootstrap_servers: str | None
+    kafka_event_topic: str
+    kafka_dlq_topic: str
+    kafka_consumer_group: str
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -33,6 +38,13 @@ class Settings:
         secret = os.getenv("SECRET_KEY", "development-only-change-me")
         jwt_secret = os.getenv("JWT_SECRET_KEY", secret)
         api_key = os.getenv("ML_API_KEY")
+
+        ingest_mode = os.getenv("EVENT_INGEST_MODE", "direct").strip().lower()
+        if ingest_mode not in {"direct", "kafka"}:
+            raise RuntimeError("EVENT_INGEST_MODE must be direct or kafka")
+
+        if ingest_mode == "kafka" and not os.getenv("KAFKA_BOOTSTRAP_SERVERS"):
+            raise RuntimeError("KAFKA_BOOTSTRAP_SERVERS is required when EVENT_INGEST_MODE=kafka")
 
         if env == "production":
             weak = {"development-only-change-me", "supersecretkey", "supersecretjwtkey", ""}
@@ -66,6 +78,11 @@ class Settings:
             ),
             trust_proxy_headers=_bool("TRUST_PROXY_HEADERS", False),
             log_level=os.getenv("LOG_LEVEL", "INFO"),
+            event_ingest_mode=ingest_mode,
+            kafka_bootstrap_servers=os.getenv("KAFKA_BOOTSTRAP_SERVERS") or None,
+            kafka_event_topic=os.getenv("KAFKA_EVENT_TOPIC", "soc.events.v1"),
+            kafka_dlq_topic=os.getenv("KAFKA_DLQ_TOPIC", "soc.events.dlq.v1"),
+            kafka_consumer_group=os.getenv("KAFKA_CONSUMER_GROUP", "soc-detector-v1"),
         )
 
     def apply(self, app) -> None:
@@ -81,5 +98,10 @@ class Settings:
             ML_RATE_WINDOW_SECONDS=self.ml_rate_window_seconds,
             TRUST_PROXY_HEADERS=self.trust_proxy_headers,
             LOG_LEVEL=self.log_level,
+            EVENT_INGEST_MODE=self.event_ingest_mode,
+            KAFKA_BOOTSTRAP_SERVERS=self.kafka_bootstrap_servers,
+            KAFKA_EVENT_TOPIC=self.kafka_event_topic,
+            KAFKA_DLQ_TOPIC=self.kafka_dlq_topic,
+            KAFKA_CONSUMER_GROUP=self.kafka_consumer_group,
             MAX_CONTENT_LENGTH=64 * 1024,
         )
