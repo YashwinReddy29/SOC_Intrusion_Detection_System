@@ -90,13 +90,21 @@ class DetectionService:
         for field in ("source_port", "destination_port", "failed_logins"):
             value = float(event[field])
             if value < 0 or not value.is_integer():
-                raise ValueError(f"Event field '{field}' must be a non-negative integer")
+                raise ValueError(
+                    f"Event field '{field}' must be a non-negative integer"
+                )
 
     def analyze(self, event: dict) -> DetectionResult:
         start = perf_counter()
         self.validate_event(event)
 
-        # The rolling extractor is stateful. Serialize feature-state mutation so\n        # concurrent HTTP/greenlet requests cannot corrupt or reorder the window.\n        with self._lock:\n            features = self.extractor.transform_event(event)\n            frame = pd.DataFrame([features], columns=FEATURE_COLUMNS)\n            scores, predictions = self.model.predict_scores(frame)\n
+        # The rolling extractor is stateful. Serialize feature-state mutation so
+        # concurrent requests cannot corrupt the causal five-minute window.
+        with self._lock:
+            features = self.extractor.transform_event(event)
+            frame = pd.DataFrame([features], columns=FEATURE_COLUMNS)
+            scores, predictions = self.model.predict_scores(frame)
+
         anomaly_score = float(scores[0])
         detected = bool(predictions[0])
         risk = score_risk(anomaly_score, features)
