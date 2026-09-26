@@ -107,7 +107,12 @@ def ingest_event():
             "schema_version": "1",
             "event": event,
         }
-        try:\n            producer = current_app.extensions.get("event_producer")\n            if producer is None:\n                producer = EventProducer(_kafka_settings())\n            producer.publish(envelope)\n        except Exception as exc:
+        try:
+            producer = current_app.extensions.get("event_producer")
+            if producer is None:
+                producer = EventProducer(_kafka_settings())
+            producer.publish(envelope)
+        except Exception as exc:
             from app.models.database import fail_event
 
             fail_event(event_id, f"Kafka publish failed: {exc}")
@@ -139,7 +144,6 @@ def event_status(event_id: str):
     if event is None:
         return _error("Event not found", 404)
 
-    # Datetimes are converted by Flask's JSON provider.
     return jsonify(event)
 
 
