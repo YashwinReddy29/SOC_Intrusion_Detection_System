@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import os
-import signal
 
 from app import create_app
 from app.messaging.kafka import EventConsumer, EventProducer, KafkaSettings
