@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 
 from flask import Response
-from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
 
 
 HTTP_REQUESTS = Counter(
@@ -36,6 +36,21 @@ INCIDENTS = Counter(
     "soc_incidents_total",
     "Incidents opened by severity.",
     ["severity"],
+)
+DEPENDENCY_READY = Gauge(
+    "soc_dependency_ready",
+    "Whether a required SOC runtime dependency is ready.",
+    ["dependency"],
+)
+KAFKA_MESSAGES = Counter(
+    "soc_kafka_messages_total",
+    "Kafka records handled by the detector worker.",
+    ["outcome"],
+)
+KAFKA_LAG = Gauge(
+    "soc_kafka_consumer_lag",
+    "Approximate Kafka consumer lag for the detector worker.",
+    ["topic", "partition"],
 )
 
 _tracing_configured = False
