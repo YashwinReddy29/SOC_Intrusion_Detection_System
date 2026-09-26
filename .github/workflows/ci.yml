@@ -2,9 +2,9 @@ name: build-and-test
 
 on:
   push:
-    branches: [main, production-v3-platform]
+    branches: [main, production-v3-platform, production-v3-phase2-incidents, production-v3-phase3-data-recovery, production-v3-phase4-ml-governance, production-v3-phase5-operations, production-v3-phase6-release]
   pull_request:
-    branches: [main]
+    branches: [main, production-v3-platform, production-v3-phase2-incidents, production-v3-phase3-data-recovery, production-v3-phase4-ml-governance, production-v3-phase5-operations, production-v3-phase6-release]
 
 permissions:
   contents: read
