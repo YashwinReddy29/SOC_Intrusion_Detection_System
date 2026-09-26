@@ -30,7 +30,7 @@ def create_app():
 
     from app.models.database import init_db, ping_db
 
-    init_db(settings.database_url)
+    init_db(settings.database_url, create_schema=settings.database_auto_create)
 
     if settings.redis_url:
         ml_rate_limiter = RedisRateLimiter(
