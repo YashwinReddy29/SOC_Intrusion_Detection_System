@@ -193,6 +193,7 @@ services:
       DATABASE_AUTO_CREATE: "false"
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318/v1/traces
       OTEL_SERVICE_NAME: soc-detector-worker
+      WORKER_METRICS_PORT: "9101"
     depends_on:
       app:
         condition: service_healthy
@@ -244,6 +245,7 @@ services:
       - --storage.tsdb.path=/prometheus
     volumes:
       - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./observability/alerts.yml:/etc/prometheus/alerts.yml:ro
       - prometheus-data:/prometheus
     depends_on:
       - app
