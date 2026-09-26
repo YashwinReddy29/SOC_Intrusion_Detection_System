@@ -14,6 +14,21 @@ services:
       - postgres-data:/var/lib/postgresql/data
     restart: unless-stopped
 
+  mlflow-db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: mlflow
+      POSTGRES_USER: mlflow
+      POSTGRES_PASSWORD: mlflow-local-only
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mlflow -d mlflow"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - mlflow-db-data:/var/lib/postgresql/data
+    restart: unless-stopped
+
   redis:
     image: redis:7.4-alpine
     command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
@@ -60,8 +75,39 @@ services:
       - /bin/sh
       - -ec
       - |
-        /opt/kafka/bin/kafka-topics.sh           --bootstrap-server kafka:9092           --create --if-not-exists           --topic soc.events.v1           --partitions 3           --replication-factor 1
-        /opt/kafka/bin/kafka-topics.sh           --bootstrap-server kafka:9092           --create --if-not-exists           --topic soc.events.dlq.v1           --partitions 3           --replication-factor 1           --config retention.ms=604800000
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic soc.events.v1 --partitions 3 --replication-factor 1
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic soc.events.dlq.v1 --partitions 3 --replication-factor 1 --config retention.ms=604800000
+
+  mlflow:
+    build:
+      context: .
+      dockerfile: Dockerfile.mlflow
+    command:
+      - mlflow
+      - server
+      - --backend-store-uri
+      - postgresql+psycopg://mlflow:mlflow-local-only@mlflow-db:5432/mlflow
+      - --artifacts-destination
+      - /mlartifacts
+      - --host
+      - 0.0.0.0
+      - --port
+      - "5000"
+      - --allowed-hosts
+      - mlflow:5000,localhost:5001,127.0.0.1:5001
+    depends_on:
+      mlflow-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - mlflow-artifacts:/mlartifacts
+    ports:
+      - "127.0.0.1:5001:5000"
+    restart: unless-stopped
 
   tempo:
     image: grafana/tempo:3.0.3
@@ -141,6 +187,37 @@ services:
         condition: service_started
     restart: unless-stopped
 
+  trainer:
+    profiles: ["mlops"]
+    build:
+      context: .
+      dockerfile: Dockerfile.mlops
+    command: ["python", "scripts/run_ml_experiment.py"]
+    environment:
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MLFLOW_EXPERIMENT_NAME: soc-intrusion-detection
+      MLFLOW_MODEL_NAME: soc-isolation-forest
+    depends_on:
+      mlflow:
+        condition: service_healthy
+
+  drift-report:
+    profiles: ["mlops"]
+    build:
+      context: .
+      dockerfile: Dockerfile.mlops
+    command: ["python", "scripts/run_drift_report.py"]
+
+  shap-report:
+    profiles: ["mlops"]
+    build:
+      context: .
+      dockerfile: Dockerfile.mlops
+    command:
+      - /bin/sh
+      - -ec
+      - python scripts/run_ml_experiment.py && python scripts/run_shap_report.py
+
   prometheus:
     image: prom/prometheus:v3.15.0
     command:
@@ -174,6 +251,8 @@ services:
 
 volumes:
   postgres-data:
+  mlflow-db-data:
+  mlflow-artifacts:
   redis-data:
   kafka-data:
   tempo-data:
