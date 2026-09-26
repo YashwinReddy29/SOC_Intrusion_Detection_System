@@ -127,6 +127,7 @@ services:
     restart: unless-stopped
 
   app:
+    image: soc-platform:local
     build: .
     environment:
       APP_ENV: ${APP_ENV:-development}
@@ -158,7 +159,7 @@ services:
     restart: unless-stopped
 
   worker:
-    build: .
+    image: soc-platform:local
     command: ["python", "scripts/run_event_consumer.py"]
     environment:
       APP_ENV: ${APP_ENV:-development}
@@ -177,6 +178,8 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318/v1/traces
       OTEL_SERVICE_NAME: soc-detector-worker
     depends_on:
+      app:
+        condition: service_healthy
       postgres:
         condition: service_healthy
       redis:
