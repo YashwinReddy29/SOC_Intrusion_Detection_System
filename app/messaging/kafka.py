@@ -9,6 +9,16 @@ from typing import Callable
 from confluent_kafka import Consumer, KafkaError, KafkaException, Producer
 
 
+def event_partition_key(envelope: dict) -> bytes:
+    """Keep one source's rolling feature history on the same Kafka partition."""
+    event = envelope.get("event")
+    if isinstance(event, dict):
+        source_ip = str(event.get("source_ip", "")).strip()
+        if source_ip:
+            return source_ip.encode()
+    return str(envelope["event_id"]).encode()
+
+
 @dataclass(frozen=True)
 class KafkaSettings:
     bootstrap_servers: str
@@ -38,7 +48,6 @@ class EventProducer:
 
     def publish(self, envelope: dict, topic: str | None = None) -> None:
         target = topic or self.settings.event_topic
-        event_id = str(envelope["event_id"])
         payload = json.dumps(envelope, separators=(",", ":"), sort_keys=True).encode()
 
         delivery_error: list[Exception] = []
@@ -49,7 +58,7 @@ class EventProducer:
 
         self._producer.produce(
             target,
-            key=event_id.encode(),
+            key=event_partition_key(envelope),
             value=payload,
             on_delivery=delivered,
         )
