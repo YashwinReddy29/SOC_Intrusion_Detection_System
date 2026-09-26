@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from threading import Event
 from typing import Callable
 
-from confluent_kafka import Consumer, KafkaError, KafkaException, Producer
+from confluent_kafka import Consumer, KafkaError, KafkaException, Producer, TopicPartition
+
+from app.observability import KAFKA_LAG, KAFKA_MESSAGES
 
 
 def event_partition_key(envelope: dict) -> bytes:
@@ -100,9 +103,14 @@ class EventConsumer:
         )
         self._consumer.subscribe([settings.event_topic])
 
-    def run(self, handler: Callable[[dict], None], producer: EventProducer) -> None:
+    def run(
+        self,
+        handler: Callable[[dict], None],
+        producer: EventProducer,
+        stop_event: Event | None = None,
+    ) -> None:
         try:
-            while True:
+            while stop_event is None or not stop_event.is_set():
                 msg = self._consumer.poll(1.0)
                 if msg is None:
                     continue
@@ -113,8 +121,21 @@ class EventConsumer:
 
                 envelope = json.loads(msg.value().decode())
                 try:
+                    _low, high = self._consumer.get_watermark_offsets(
+                        TopicPartition(msg.topic(), msg.partition()), cached=False
+                    )
+                    KAFKA_LAG.labels(
+                        topic=msg.topic(),
+                        partition=str(msg.partition()),
+                    ).set(max(0, high - msg.offset() - 1))
+                except KafkaException:
+                    pass
+
+                try:
                     handler(envelope)
+                    KAFKA_MESSAGES.labels(outcome="processed").inc()
                 except Exception as exc:
+                    KAFKA_MESSAGES.labels(outcome="dlq").inc()
                     # Do not commit the source offset unless the failed event was
                     # durably copied to the DLQ. If DLQ publication fails, the
                     # exception escapes and Kafka can redeliver the source event.
