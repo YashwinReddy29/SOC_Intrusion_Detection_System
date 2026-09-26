@@ -95,10 +95,7 @@ class RollingFeatureExtractor:
         # Score with current event + prior window events, then append current
         # event so future rows can use it. This keeps the feature causal.
         prior_source_events = [item[1] for item in source_history]
-        prior_global_events = [item[1] for item in self.global_events]
-
         source_context = prior_source_events + [event]
-        global_context = prior_global_events + [event]
 
         total_source = len(source_context)
         destination_ips = [str(e["destination_ip"]) for e in source_context]
