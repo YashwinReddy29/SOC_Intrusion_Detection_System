@@ -106,10 +106,11 @@ class EventConsumer:
                 try:
                     handler(envelope)
                 except Exception as exc:
+                    # Do not commit the source offset unless the failed event was
+                    # durably copied to the DLQ. If DLQ publication fails, the
+                    # exception escapes and Kafka can redeliver the source event.
                     producer.publish_dlq(envelope, str(exc))
-                finally:
-                    # Once a poison event is safely copied to the DLQ, advance the
-                    # source offset so it cannot block the partition forever.
-                    self._consumer.commit(message=msg, asynchronous=False)
+
+                self._consumer.commit(message=msg, asynchronous=False)
         finally:
             self._consumer.close()
