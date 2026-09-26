@@ -6,6 +6,7 @@ import logging
 import os
 
 from app import create_app
+from app.event_schema import EVENT_SCHEMA_VERSION, validate_event_v1
 from app.messaging.kafka import EventConsumer, EventProducer, KafkaSettings
 from app.models.database import create_event
 from app.services.event_processing import process_event
@@ -41,10 +42,10 @@ def main() -> None:
             raise ValueError("Kafka envelope event_id must contain 1-64 characters")
         if not isinstance(event, dict):
             raise ValueError("Kafka envelope event must be an object")
-        if schema_version != "1":
+        if schema_version != EVENT_SCHEMA_VERSION:
             raise ValueError(f"Unsupported event schema version: {schema_version}")
 
-        detector.validate_event(event)
+        validate_event_v1(event)
         create_event(
             event_id=event_id,
             event_payload=event,
