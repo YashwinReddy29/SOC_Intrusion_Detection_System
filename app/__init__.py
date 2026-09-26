@@ -7,6 +7,12 @@ from flask import Flask, g, jsonify, request
 from flask_socketio import SocketIO
 
 from app.config import Settings
+from app.observability import (
+    HTTP_LATENCY,
+    HTTP_REQUESTS,
+    configure_tracing,
+    metrics_response,
+)
 from app.security import InMemoryRateLimiter, RedisRateLimiter
 
 
@@ -104,18 +110,32 @@ def create_app():
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["Cache-Control"] = "no-store"
-        duration_ms = (
+
+        duration_seconds = max(
+            0.0,
             time.perf_counter()
-            - getattr(g, "request_started", time.perf_counter())
-        ) * 1000.0
+            - getattr(g, "request_started", time.perf_counter()),
+        )
+        endpoint = request.endpoint or "unmatched"
+        HTTP_REQUESTS.labels(
+            method=request.method,
+            endpoint=endpoint,
+            status=str(response.status_code),
+        ).inc()
+        HTTP_LATENCY.labels(
+            method=request.method,
+            endpoint=endpoint,
+        ).observe(duration_seconds)
+
         logger.info(
             json.dumps(
                 {
                     "request_id": request_id,
                     "method": request.method,
                     "path": request.path,
+                    "endpoint": endpoint,
                     "status": response.status_code,
-                    "duration_ms": round(duration_ms, 3),
+                    "duration_ms": round(duration_seconds * 1000.0, 3),
                 }
             )
         )
@@ -182,4 +202,9 @@ def create_app():
             payload["model_version"] = detector.model.VERSION
         return jsonify(payload), (200 if ready else 503)
 
+    @app.route("/metrics", methods=["GET"])
+    def metrics():
+        return metrics_response()
+
+    configure_tracing(app)
     return app
