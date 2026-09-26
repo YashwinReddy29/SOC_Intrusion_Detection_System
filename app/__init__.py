@@ -38,7 +38,27 @@ def create_app():
             window_seconds=settings.ml_rate_window_seconds,
         )
 
-    socketio.init_app(\n        app,\n        cors_allowed_origins=settings.socketio_cors_origins,\n        async_mode="gevent",\n        message_queue=settings.redis_url,\n    )\n\n    event_producer = None\n    if settings.event_ingest_mode == "kafka":\n        from app.messaging.kafka import EventProducer, KafkaSettings\n\n        event_producer = EventProducer(\n            KafkaSettings(\n                bootstrap_servers=settings.kafka_bootstrap_servers or "",\n                event_topic=settings.kafka_event_topic,\n                dlq_topic=settings.kafka_dlq_topic,\n                consumer_group=settings.kafka_consumer_group,\n            )\n        )\n        app.extensions["event_producer"] = event_producer\n
+    socketio.init_app(
+        app,
+        cors_allowed_origins=settings.socketio_cors_origins,
+        async_mode="gevent",
+        message_queue=settings.redis_url,
+    )
+
+    event_producer = None
+    if settings.event_ingest_mode == "kafka":
+        from app.messaging.kafka import EventProducer, KafkaSettings
+
+        event_producer = EventProducer(
+            KafkaSettings(
+                bootstrap_servers=settings.kafka_bootstrap_servers or "",
+                event_topic=settings.kafka_event_topic,
+                dlq_topic=settings.kafka_dlq_topic,
+                consumer_group=settings.kafka_consumer_group,
+            )
+        )
+        app.extensions["event_producer"] = event_producer
+
     @app.before_request
     def attach_request_context():
         g.request_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex
@@ -132,17 +152,30 @@ def create_app():
 
     @app.route("/ready", methods=["GET"])
     def readiness():
-        dependencies = {\n            "model": False,\n            "database": False,\n            "redis": not settings.redis_url,\n            "kafka": settings.event_ingest_mode != "kafka",\n        }\n        try:
+        dependencies = {
+            "model": False,
+            "database": False,
+            "redis": not settings.redis_url,
+            "kafka": settings.event_ingest_mode != "kafka",
+        }
+        try:
             from app.controllers.ml_controller import detector
 
             dependencies["model"] = detector.model.model is not None
             ping_db()
             dependencies["database"] = True
-            if settings.redis_url:\n                dependencies["redis"] = bool(ml_rate_limiter.ping())\n            if event_producer is not None:\n                dependencies["kafka"] = bool(event_producer.ping())\n        except Exception:
+            if settings.redis_url:
+                dependencies["redis"] = bool(ml_rate_limiter.ping())
+            if event_producer is not None:
+                dependencies["kafka"] = bool(event_producer.ping())
+        except Exception:
             logger.exception("Readiness check failed")
 
         ready = all(dependencies.values())
-        payload = {"status": "ready" if ready else "not_ready", "dependencies": dependencies}
+        payload = {
+            "status": "ready" if ready else "not_ready",
+            "dependencies": dependencies,
+        }
         if dependencies["model"]:
             from app.controllers.ml_controller import detector
 
