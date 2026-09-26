@@ -10,6 +10,7 @@ from app.config import Settings
 from app.observability import (
     HTTP_LATENCY,
     HTTP_REQUESTS,
+    DEPENDENCY_READY,
     configure_tracing,
     metrics_response,
 )
@@ -192,6 +193,9 @@ def create_app():
                 dependencies["kafka"] = bool(event_producer.ping())
         except Exception:
             logger.exception("Readiness check failed")
+
+        for dependency, value in dependencies.items():
+            DEPENDENCY_READY.labels(dependency=dependency).set(1 if value else 0)
 
         ready = all(dependencies.values())
         payload = {
