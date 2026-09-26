@@ -31,6 +31,7 @@ class Settings:
     kafka_event_topic: str
     kafka_dlq_topic: str
     kafka_consumer_group: str
+    database_auto_create: bool
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -83,6 +84,7 @@ class Settings:
             kafka_event_topic=os.getenv("KAFKA_EVENT_TOPIC", "soc.events.v1"),
             kafka_dlq_topic=os.getenv("KAFKA_DLQ_TOPIC", "soc.events.dlq.v1"),
             kafka_consumer_group=os.getenv("KAFKA_CONSUMER_GROUP", "soc-detector-v1"),
+            database_auto_create=_bool("DATABASE_AUTO_CREATE", env != "production"),
         )
 
     def apply(self, app) -> None:
@@ -103,5 +105,6 @@ class Settings:
             KAFKA_EVENT_TOPIC=self.kafka_event_topic,
             KAFKA_DLQ_TOPIC=self.kafka_dlq_topic,
             KAFKA_CONSUMER_GROUP=self.kafka_consumer_group,
+            DATABASE_AUTO_CREATE=self.database_auto_create,
             MAX_CONTENT_LENGTH=64 * 1024,
         )
