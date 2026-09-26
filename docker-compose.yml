@@ -60,8 +60,25 @@ services:
       - /bin/sh
       - -ec
       - |
-        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092           --create --if-not-exists --topic soc.events.v1           --partitions 3 --replication-factor 1
-        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092           --create --if-not-exists --topic soc.events.dlq.v1           --partitions 3 --replication-factor 1           --config retention.ms=604800000
+        /opt/kafka/bin/kafka-topics.sh           --bootstrap-server kafka:9092           --create --if-not-exists           --topic soc.events.v1           --partitions 3           --replication-factor 1
+        /opt/kafka/bin/kafka-topics.sh           --bootstrap-server kafka:9092           --create --if-not-exists           --topic soc.events.dlq.v1           --partitions 3           --replication-factor 1           --config retention.ms=604800000
+
+  tempo:
+    image: grafana/tempo:3.0.3
+    command: ["-config.file=/etc/tempo.yml"]
+    volumes:
+      - ./observability/tempo.yml:/etc/tempo.yml:ro
+      - tempo-data:/var/tempo
+    restart: unless-stopped
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.161.0
+    command: ["--config=/etc/otelcol/config.yml"]
+    volumes:
+      - ./observability/otel-collector.yml:/etc/otelcol/config.yml:ro
+    depends_on:
+      - tempo
+    restart: unless-stopped
 
   app:
     build: .
@@ -79,6 +96,8 @@ services:
       KAFKA_CONSUMER_GROUP: soc-detector-v1
       SOCKETIO_CORS_ORIGINS: http://127.0.0.1:5000,http://localhost:5000
       TRUST_PROXY_HEADERS: "false"
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318/v1/traces
+      OTEL_SERVICE_NAME: soc-api
     depends_on:
       postgres:
         condition: service_healthy
@@ -86,6 +105,8 @@ services:
         condition: service_healthy
       kafka-init:
         condition: service_completed_successfully
+      otel-collector:
+        condition: service_started
     ports:
       - "127.0.0.1:5000:5000"
     restart: unless-stopped
@@ -107,6 +128,8 @@ services:
       KAFKA_CONSUMER_GROUP: soc-detector-v1
       SOCKETIO_CORS_ORIGINS: http://127.0.0.1:5000,http://localhost:5000
       TRUST_PROXY_HEADERS: "false"
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318/v1/traces
+      OTEL_SERVICE_NAME: soc-detector-worker
     depends_on:
       postgres:
         condition: service_healthy
@@ -114,9 +137,45 @@ services:
         condition: service_healthy
       kafka-init:
         condition: service_completed_successfully
+      otel-collector:
+        condition: service_started
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v3.15.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    depends_on:
+      - app
+    ports:
+      - "127.0.0.1:9090:9090"
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:13.2.2
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin-local-only}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+      - tempo
+    ports:
+      - "127.0.0.1:3000:3000"
     restart: unless-stopped
 
 volumes:
   postgres-data:
   redis-data:
   kafka-data:
+  tempo-data:
+  prometheus-data:
+  grafana-data:
