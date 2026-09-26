@@ -171,8 +171,8 @@ def api_logs():
 @realtime_bp.route("/report")
 @login_required
 def report():
-    generate_report()
-    return send_file("soc_report.pdf", as_attachment=True)
+    path = generate_report()
+    return send_file(path, as_attachment=True, download_name="soc_report.pdf")
 
 
 @realtime_bp.route("/export_csv")
