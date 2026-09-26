@@ -1,0 +1,4 @@
+-r requirements.txt
+mlflow==3.16.1
+evidently==0.7.23
+shap>=0.52,<0.53
