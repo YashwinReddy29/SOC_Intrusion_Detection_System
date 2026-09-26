@@ -6,6 +6,7 @@ import uuid
 
 from flask import Blueprint, current_app, g, jsonify, request
 
+from app.event_schema import validate_event_v1
 from app.messaging.kafka import EventProducer, KafkaSettings
 from app.models.database import create_event, get_event, get_incidents
 from app.observability import EVENTS
@@ -64,7 +65,7 @@ def ingest_event():
         return _error("Request body must be a JSON object", 400)
 
     try:
-        detector.validate_event(event)
+        validate_event_v1(event)
     except (ValueError, TypeError, KeyError) as exc:
         return _error(str(exc), 400)
 
