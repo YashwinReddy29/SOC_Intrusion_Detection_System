@@ -22,6 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DATA_PATH = ROOT / "ml" / "data" / "soc_events_v2.csv"
 MODEL_PATH = ROOT / "ml" / "models" / "isolation_forest.joblib"
 REPORT_PATH = ROOT / "ml" / "reports" / "ml_metrics_v2.json"
+MANIFEST_PATH = ROOT / "ml" / "reports" / "model_manifest_v2.json"
 
 
 def _distribution(frame: pd.DataFrame) -> dict:
@@ -154,6 +155,17 @@ def main():
     service.save()
     save_metrics(metrics, str(REPORT_PATH))
 
+    from ml.governance import build_reproducibility_manifest, save_manifest
+
+    manifest = build_reproducibility_manifest(
+        model_path=MODEL_PATH,
+        metrics_path=REPORT_PATH,
+        dataset_path=DATA_PATH,
+        feature_columns=service.feature_columns,
+        metrics=metrics,
+    )
+    save_manifest(manifest, MANIFEST_PATH)
+
     if os.getenv("MLFLOW_TRACKING_URI"):
         from ml.mlflow_registry import log_training_run
 
@@ -163,6 +175,7 @@ def main():
             feature_sample=X_train,
             artifact_path=MODEL_PATH,
             report_path=REPORT_PATH,
+            manifest_path=MANIFEST_PATH,
         )
         print("MLflow:")
         print(json.dumps(mlflow_result, indent=2))
@@ -175,6 +188,7 @@ def main():
     print(f"\nSaved dataset: {DATA_PATH}")
     print(f"Saved model:   {MODEL_PATH}")
     print(f"Saved report:  {REPORT_PATH}")
+    print(f"Saved manifest:{MANIFEST_PATH}")
 
 
 if __name__ == "__main__":
