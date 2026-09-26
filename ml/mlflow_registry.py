@@ -51,9 +51,9 @@ def log_training_run(
             "validation_precision",
             "validation_recall",
             "validation_f1",
-            "latency_mean_ms",
-            "latency_p95_ms",
-            "latency_p99_ms",
+            "latency_ms_mean",
+            "latency_ms_p95",
+            "latency_ms_p99",
         ):
             value = metrics.get(key)
             if value is not None:
