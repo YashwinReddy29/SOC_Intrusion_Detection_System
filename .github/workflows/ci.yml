@@ -156,3 +156,51 @@ jobs:
           assert manifest["promotion_gate"]["passed"] is True
           assert {item["feature"] for item in shap["features"]} == set(FEATURE_COLUMNS)
           PY
+
+  operations-validation:
+    runs-on: ubuntu-latest
+    needs: quality
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v7
+
+      - name: Validate Prometheus config and rules
+        run: |
+          docker run --rm \
+            -v "$PWD/observability:/etc/prometheus:ro" \
+            --entrypoint promtool \
+            prom/prometheus:v3.15.0 \
+            check config /etc/prometheus/prometheus.yml
+
+      - name: Validate Grafana dashboards
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          for path in Path("observability/grafana/dashboards").glob("*.json"):
+              payload = json.loads(path.read_text())
+              assert payload.get("uid")
+              assert payload.get("panels")
+              ids = [panel["id"] for panel in payload["panels"]]
+              assert len(ids) == len(set(ids))
+              for panel in payload["panels"]:
+                  for target in panel.get("targets", []):
+                      expr = target.get("expr", "")
+                      for forbidden in ("source_ip", "event_id", "api_key", "incident_id"):
+                          assert forbidden not in expr
+          PY
+
+      - name: Validate observability contract
+        run: |
+          python -m pip install -r requirements-dev.txt
+          PYTHONPATH=. pytest -q tests/test_observability.py
+
+      - name: Validate Compose service graph
+        run: |
+          docker compose config --quiet
+          docker compose config --services | grep -qx app
+          docker compose config --services | grep -qx worker
+          docker compose config --services | grep -qx prometheus
+          docker compose config --services | grep -qx grafana
+          docker compose config --services | grep -qx tempo
+          docker compose config --services | grep -qx otel-collector
