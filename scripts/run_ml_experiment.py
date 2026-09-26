@@ -7,6 +7,7 @@ ordered stream so online feature state is causal (current event + prior events o
 
 from pathlib import Path
 import json
+import os
 
 import pandas as pd
 from sklearn.metrics import f1_score, precision_score, recall_score
@@ -152,6 +153,19 @@ def main():
 
     service.save()
     save_metrics(metrics, str(REPORT_PATH))
+
+    if os.getenv("MLFLOW_TRACKING_URI"):
+        from ml.mlflow_registry import log_training_run
+
+        mlflow_result = log_training_run(
+            service=service,
+            metrics=metrics,
+            feature_sample=X_train,
+            artifact_path=MODEL_PATH,
+            report_path=REPORT_PATH,
+        )
+        print("MLflow:")
+        print(json.dumps(mlflow_result, indent=2))
 
     print("[6/7] Per-attack TEST metrics")
     print(json.dumps(metrics["attack_family_metrics_test"], indent=2))
