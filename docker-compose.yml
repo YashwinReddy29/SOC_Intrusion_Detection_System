@@ -126,6 +126,17 @@ services:
       - tempo
     restart: unless-stopped
 
+  migrate:
+    image: soc-platform:local
+    build: .
+    command: ["python", "scripts/migrate_database.py"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://soc:soc-local-only@postgres:5432/soc
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
   app:
     image: soc-platform:local
     build: .
@@ -143,9 +154,12 @@ services:
       KAFKA_CONSUMER_GROUP: soc-detector-v1
       SOCKETIO_CORS_ORIGINS: http://127.0.0.1:5000,http://localhost:5000
       TRUST_PROXY_HEADERS: "false"
+      DATABASE_AUTO_CREATE: "false"
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318/v1/traces
       OTEL_SERVICE_NAME: soc-api
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
@@ -176,6 +190,7 @@ services:
       KAFKA_CONSUMER_GROUP: soc-detector-v1
       SOCKETIO_CORS_ORIGINS: http://127.0.0.1:5000,http://localhost:5000
       TRUST_PROXY_HEADERS: "false"
+      DATABASE_AUTO_CREATE: "false"
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318/v1/traces
       OTEL_SERVICE_NAME: soc-detector-worker
     depends_on:
