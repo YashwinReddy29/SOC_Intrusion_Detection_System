@@ -16,6 +16,7 @@ def log_training_run(
     feature_sample,
     artifact_path: str | Path,
     report_path: str | Path,
+    manifest_path: str | Path,
 ) -> dict:
     tracking_uri = os.getenv("MLFLOW_TRACKING_URI")
     if not tracking_uri:
@@ -61,6 +62,7 @@ def log_training_run(
 
         mlflow.log_artifact(str(artifact_path), artifact_path="model_bundle")
         mlflow.log_artifact(str(report_path), artifact_path="reports")
+        mlflow.log_artifact(str(manifest_path), artifact_path="governance")
 
         info = mlflow.sklearn.log_model(
             sk_model=service.model,
