@@ -21,7 +21,9 @@ FROM python:3.12-slim AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PATH=/usr/local/bin:$PATH
+    PATH=/usr/local/bin:$PATH \
+    DATABASE_URL=sqlite:////app/runtime/soc.db \
+    REPORT_DIR=/app/runtime
 
 WORKDIR /app
 
