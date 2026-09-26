@@ -59,7 +59,12 @@ class EventProducer:
         if remaining:
             raise RuntimeError(f"{remaining} Kafka message(s) were not delivered")
 
-    def ping(self) -> bool:\n        self._producer.list_topics(timeout=3)\n        return True\n\n    def publish_dlq(self, envelope: dict, error: str) -> None:\n        failed = {
+    def ping(self) -> bool:
+        self._producer.list_topics(timeout=3)
+        return True
+
+    def publish_dlq(self, envelope: dict, error: str) -> None:
+        failed = {
             "event_id": envelope.get("event_id"),
             "schema_version": envelope.get("schema_version", "1"),
             "event": envelope.get("event"),
