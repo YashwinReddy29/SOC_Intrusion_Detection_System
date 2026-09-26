@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import logging
 import os
+import signal
+from threading import Event
+
+from prometheus_client import start_http_server
 
 from app import create_app
 from app.event_schema import EVENT_SCHEMA_VERSION, validate_event_v1
@@ -18,6 +22,7 @@ logger = logging.getLogger("soc.consumer")
 
 
 def main() -> None:
+    start_http_server(int(os.getenv("WORKER_METRICS_PORT", "9101")))
     app = create_app()
     bootstrap = app.config.get("KAFKA_BOOTSTRAP_SERVERS")
     if not bootstrap:
@@ -31,6 +36,14 @@ def main() -> None:
     )
     producer = EventProducer(settings)
     consumer = EventConsumer(settings)
+    stop_event = Event()
+
+    def request_shutdown(signum, _frame) -> None:
+        logger.info("Shutdown requested signal=%s", signum)
+        stop_event.set()
+
+    signal.signal(signal.SIGTERM, request_shutdown)
+    signal.signal(signal.SIGINT, request_shutdown)
     detector = DetectionService("ml/models/isolation_forest.joblib")
 
     def handler(envelope: dict) -> None:
@@ -61,7 +74,7 @@ def main() -> None:
         settings.event_topic,
         settings.consumer_group,
     )
-    consumer.run(handler, producer)
+    consumer.run(handler, producer, stop_event=stop_event)
 
 
 if __name__ == "__main__":
