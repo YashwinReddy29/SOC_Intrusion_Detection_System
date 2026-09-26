@@ -64,8 +64,8 @@ def test_event_endpoint_scores_and_returns_detection(monkeypatch, sample_event: 
     app = create_app()
     client = app.test_client()
 
-    monkeypatch.setattr("app.controllers.ml_controller.threat_score", lambda _ip: 0)
-    monkeypatch.setattr("app.controllers.ml_controller.insert_log", lambda *_args: None)
+    monkeypatch.setattr("app.services.event_processing.threat_score", lambda _ip: 0)
+    monkeypatch.setattr("app.services.event_processing.insert_log", lambda *_args: None)
 
     response = client.post("/api/ml/events", json=sample_event)
 
