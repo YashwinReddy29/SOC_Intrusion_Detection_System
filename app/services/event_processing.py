@@ -13,12 +13,14 @@ from app.models.database import (
     insert_log,
     mark_event_processing,
 )
+from app.observability import DETECTION_LATENCY, DETECTIONS, EVENTS, INCIDENTS
 from app.services.threat_service import threat_score
 
 
 def process_event(event_id: str, event: dict, detector) -> dict:
     existing = get_event(event_id)
     if existing and existing.get("status") == "processed":
+        EVENTS.labels(state="deduplicated").inc()
         return {
             "event_id": event_id,
             "event": existing["event_payload"],
@@ -28,6 +30,7 @@ def process_event(event_id: str, event: dict, detector) -> dict:
         }
 
     mark_event_processing(event_id)
+    EVENTS.labels(state="processing").inc()
 
     try:
         result = detector.analyze(event)
@@ -53,10 +56,17 @@ def process_event(event_id: str, event: dict, detector) -> dict:
             severity=result.severity,
         )
 
+        DETECTIONS.labels(
+            detected=str(bool(result.detected)).lower(),
+            severity=result.severity,
+        ).inc()
+        DETECTION_LATENCY.observe(max(0.0, result.latency_ms / 1000.0))
+        EVENTS.labels(state="processed").inc()
+
         incident_id = None
         if result.detected:
             incident_id = uuid.uuid4().hex
-            create_incident(
+            created = create_incident(
                 incident_id=incident_id,
                 event_id=event_id,
                 severity=result.severity,
@@ -64,6 +74,10 @@ def process_event(event_id: str, event: dict, detector) -> dict:
                 risk_score=result.risk_score,
                 summary=message,
             )
+            if created:
+                INCIDENTS.labels(severity=result.severity).inc()
+            else:
+                incident_id = None
 
         payload = {
             "event_id": event_id,
@@ -92,5 +106,6 @@ def process_event(event_id: str, event: dict, detector) -> dict:
 
         return payload
     except Exception as exc:
+        EVENTS.labels(state="failed").inc()
         fail_event(event_id, str(exc))
         raise
