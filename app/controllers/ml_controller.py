@@ -84,7 +84,10 @@ def ingest_event():
         schema_version="1",
     )
 
-    if not created:\n        EVENTS.labels(state="deduplicated").inc()\n        existing = get_event(event_id)\n        if existing is None:
+    if not created:
+        EVENTS.labels(state="deduplicated").inc()
+        existing = get_event(event_id)
+        if existing is None:
             return _error("Duplicate event could not be loaded", 409)
         status = existing.get("status")
         code = 200 if status == "processed" else 202
@@ -98,7 +101,9 @@ def ingest_event():
             }
         ), code
 
-    EVENTS.labels(state="received").inc()\n    ingest_mode = current_app.config.get("EVENT_INGEST_MODE", "direct")\n
+    EVENTS.labels(state="received").inc()
+    ingest_mode = current_app.config.get("EVENT_INGEST_MODE", "direct")
+
     if ingest_mode == "kafka":
         envelope = {
             "event_id": event_id,
@@ -113,7 +118,9 @@ def ingest_event():
         except Exception as exc:
             from app.models.database import fail_event
 
-            EVENTS.labels(state="failed").inc()\n            fail_event(event_id, f"Kafka publish failed: {exc}")\n            return _error("Event queue unavailable", 503)
+            EVENTS.labels(state="failed").inc()
+            fail_event(event_id, f"Kafka publish failed: {exc}")
+            return _error("Event queue unavailable", 503)
 
         return jsonify(
             {
