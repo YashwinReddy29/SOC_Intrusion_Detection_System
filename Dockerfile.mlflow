@@ -1,5 +1,10 @@
 FROM ghcr.io/mlflow/mlflow:v3.16.1-full
 
-RUN python -m pip install --no-cache-dir "psycopg[binary]>=3.2,<4"
+USER root
 
+RUN python -m pip install --no-cache-dir "psycopg[binary]>=3.2,<4" && \
+    mkdir -p /mlflow /mlartifacts && \
+    chown -R 1000:1000 /mlflow /mlartifacts
+
+WORKDIR /mlflow
 USER 1000
