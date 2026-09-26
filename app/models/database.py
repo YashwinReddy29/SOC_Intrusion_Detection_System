@@ -124,10 +124,11 @@ def _get_engine() -> Engine:
     return _engine
 
 
-def init_db(database_url: str | None = None) -> None:
+def init_db(database_url: str | None = None, create_schema: bool = True) -> None:
     if database_url:
         configure_database(database_url)
-    metadata.create_all(_get_engine())
+    if create_schema:
+        metadata.create_all(_get_engine())
 
 
 def ping_db() -> None:
@@ -493,6 +494,57 @@ def get_incident_audit(incident_id: str) -> list[dict]:
             .order_by(incident_audit.c.id.asc())
         ).mappings().all()
     return [dict(row) for row in rows]
+
+
+def create_or_get_incident(
+    *,
+    fingerprint: str,
+    incident_id: str,
+    event_id: str,
+    severity: str,
+    source_ip: str,
+    risk_score: float,
+    summary: str,
+) -> tuple[str, bool]:
+    """Atomically create the fingerprint and incident, or return its existing incident."""
+    try:
+        with _get_engine().begin() as conn:
+            conn.execute(
+                incident_fingerprints.insert().values(
+                    fingerprint=fingerprint,
+                    incident_id=incident_id,
+                )
+            )
+            conn.execute(
+                incidents.insert().values(
+                    incident_id=incident_id,
+                    event_id=event_id,
+                    status="open",
+                    severity=severity,
+                    source_ip=source_ip,
+                    risk_score=float(risk_score),
+                    summary=summary,
+                )
+            )
+        return incident_id, False
+    except IntegrityError:
+        with _get_engine().connect() as conn:
+            existing = conn.execute(
+                select(incident_fingerprints.c.incident_id)
+                .where(incident_fingerprints.c.fingerprint == fingerprint)
+                .limit(1)
+            ).first()
+            if existing is not None:
+                return str(existing[0]), True
+
+            by_event = conn.execute(
+                select(incidents.c.incident_id)
+                .where(incidents.c.event_id == event_id)
+                .limit(1)
+            ).first()
+            if by_event is not None:
+                return str(by_event[0]), True
+        raise
 
 
 def create_or_get_incident(
