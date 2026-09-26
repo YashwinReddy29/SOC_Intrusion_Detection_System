@@ -14,11 +14,7 @@ RUN python -m venv /opt/venv && \
     pip install -r requirements.txt
 
 COPY . .
-
-# Build the deterministic detector artifact inside the same virtual environment
-# that is copied to the runtime image.
 RUN PYTHONPATH=. python scripts/run_ml_experiment.py
-
 
 FROM python:3.12-slim AS runtime
 
