@@ -160,6 +160,7 @@ services:
 
   worker:
     image: soc-platform:local
+    build: .
     command: ["python", "scripts/run_event_consumer.py"]
     environment:
       APP_ENV: ${APP_ENV:-development}
