@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
 import uuid
+
+import pandas as pd
 
 from app import socketio
 from app.models.database import (
     complete_event,
-    create_incident,
+    create_or_get_incident,
     fail_event,
     get_event,
     insert_log,
@@ -64,20 +67,34 @@ def process_event(event_id: str, event: dict, detector) -> dict:
         EVENTS.labels(state="processed").inc()
 
         incident_id = None
+        incident_deduplicated = False
         if result.detected:
-            incident_id = uuid.uuid4().hex
-            created = create_incident(
-                incident_id=incident_id,
+            timestamp = pd.to_datetime(event["timestamp"], utc=True)
+            five_minute_bucket = int(timestamp.timestamp()) // 300
+            fingerprint_material = "|".join(
+                [
+                    ip,
+                    str(event.get("destination_ip", "")),
+                    str(event.get("destination_port", "")),
+                    str(event.get("protocol", "")),
+                    result.severity,
+                    str(five_minute_bucket),
+                ]
+            )
+            fingerprint = hashlib.sha256(fingerprint_material.encode()).hexdigest()
+
+            candidate_incident_id = uuid.uuid4().hex
+            incident_id, incident_deduplicated = create_or_get_incident(
+                fingerprint=fingerprint,
+                incident_id=candidate_incident_id,
                 event_id=event_id,
                 severity=result.severity,
                 source_ip=ip,
                 risk_score=result.risk_score,
                 summary=message,
             )
-            if created:
+            if not incident_deduplicated:
                 INCIDENTS.labels(severity=result.severity).inc()
-            else:
-                incident_id = None
 
         payload = {
             "event_id": event_id,
@@ -86,6 +103,7 @@ def process_event(event_id: str, event: dict, detector) -> dict:
             "model_version": detector.model.VERSION,
             "threshold": detector.model.threshold,
             "incident_id": incident_id,
+            "incident_deduplicated": incident_deduplicated,
             "deduplicated": False,
         }
 

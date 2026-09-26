@@ -160,11 +160,13 @@ def create_app():
             }
         ), 500
 
-    from app.controllers.realtime_controller import realtime_bp
+    from app.controllers.incidents_controller import incidents_bp
     from app.controllers.ml_controller import ml_bp
+    from app.controllers.realtime_controller import realtime_bp
 
     app.register_blueprint(realtime_bp)
     app.register_blueprint(ml_bp)
+    app.register_blueprint(incidents_bp)
 
     @app.route("/health", methods=["GET"])
     def liveness():

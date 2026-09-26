@@ -75,6 +75,37 @@ incidents = Table(
     Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()),
 )
 
+incident_audit = Table(
+    "incident_audit",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("incident_id", String(64), nullable=False, index=True),
+    Column("actor", String(128), nullable=False),
+    Column("action", String(64), nullable=False),
+    Column("from_status", String(32), nullable=True),
+    Column("to_status", String(32), nullable=True),
+    Column("details", JSON, nullable=False, default=dict),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+)
+
+incident_notes = Table(
+    "incident_notes",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("incident_id", String(64), nullable=False, index=True),
+    Column("author", String(128), nullable=False),
+    Column("note", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+)
+
+incident_fingerprints = Table(
+    "incident_fingerprints",
+    metadata,
+    Column("fingerprint", String(64), primary_key=True),
+    Column("incident_id", String(64), nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+)
+
 _engine: Engine | None = None
 
 
@@ -259,3 +290,257 @@ def get_incidents(limit: int = 100) -> list[dict]:
     with _get_engine().connect() as conn:
         rows = conn.execute(statement).mappings().all()
     return [dict(row) for row in rows]
+
+INCIDENT_TRANSITIONS = {
+    "open": {"acknowledged", "investigating", "resolved", "false_positive"},
+    "acknowledged": {"investigating", "resolved", "false_positive"},
+    "investigating": {"acknowledged", "resolved", "false_positive"},
+    "resolved": {"investigating"},
+    "false_positive": {"investigating"},
+}
+
+
+def get_incident(incident_id: str) -> dict | None:
+    with _get_engine().connect() as conn:
+        row = conn.execute(
+            select(incidents).where(incidents.c.incident_id == incident_id).limit(1)
+        ).mappings().first()
+    return dict(row) if row else None
+
+
+def register_incident_fingerprint(fingerprint: str, incident_id: str) -> bool:
+    try:
+        with _get_engine().begin() as conn:
+            conn.execute(
+                incident_fingerprints.insert().values(
+                    fingerprint=fingerprint,
+                    incident_id=incident_id,
+                )
+            )
+        return True
+    except IntegrityError:
+        return False
+
+
+def incident_for_fingerprint(fingerprint: str) -> str | None:
+    with _get_engine().connect() as conn:
+        row = conn.execute(
+            select(incident_fingerprints.c.incident_id)
+            .where(incident_fingerprints.c.fingerprint == fingerprint)
+            .limit(1)
+        ).first()
+    return str(row[0]) if row else None
+
+
+def append_incident_audit(
+    incident_id: str,
+    actor: str,
+    action: str,
+    *,
+    from_status: str | None = None,
+    to_status: str | None = None,
+    details: dict | None = None,
+) -> None:
+    with _get_engine().begin() as conn:
+        conn.execute(
+            incident_audit.insert().values(
+                incident_id=incident_id,
+                actor=actor,
+                action=action,
+                from_status=from_status,
+                to_status=to_status,
+                details=details or {},
+            )
+        )
+
+
+def transition_incident(incident_id: str, to_status: str, actor: str) -> dict:
+    target = str(to_status).strip().lower()
+    with _get_engine().begin() as conn:
+        row = conn.execute(
+            select(incidents)
+            .where(incidents.c.incident_id == incident_id)
+            .limit(1)
+        ).mappings().first()
+        if row is None:
+            raise KeyError("incident not found")
+
+        current = str(row["status"])
+        if target == current:
+            return dict(row)
+        if target not in INCIDENT_TRANSITIONS.get(current, set()):
+            raise ValueError(f"invalid incident transition: {current} -> {target}")
+
+        result = conn.execute(
+            update(incidents)
+            .where(
+                (incidents.c.incident_id == incident_id)
+                & (incidents.c.status == current)
+            )
+            .values(status=target, updated_at=func.now())
+        )
+        if result.rowcount != 1:
+            raise RuntimeError("incident changed concurrently; retry the request")
+
+        conn.execute(
+            incident_audit.insert().values(
+                incident_id=incident_id,
+                actor=actor,
+                action="status_changed",
+                from_status=current,
+                to_status=target,
+                details={},
+            )
+        )
+
+        updated_row = conn.execute(
+            select(incidents)
+            .where(incidents.c.incident_id == incident_id)
+            .limit(1)
+        ).mappings().first()
+    return dict(updated_row)
+
+
+def assign_incident(incident_id: str, assignee: str | None, actor: str) -> dict:
+    normalized = assignee.strip() if isinstance(assignee, str) else None
+    normalized = normalized or None
+    with _get_engine().begin() as conn:
+        row = conn.execute(
+            select(incidents)
+            .where(incidents.c.incident_id == incident_id)
+            .limit(1)
+        ).mappings().first()
+        if row is None:
+            raise KeyError("incident not found")
+
+        previous = row["assignee"]
+        conn.execute(
+            update(incidents)
+            .where(incidents.c.incident_id == incident_id)
+            .values(assignee=normalized, updated_at=func.now())
+        )
+        conn.execute(
+            incident_audit.insert().values(
+                incident_id=incident_id,
+                actor=actor,
+                action="assignment_changed",
+                details={"from": previous, "to": normalized},
+            )
+        )
+        updated_row = conn.execute(
+            select(incidents)
+            .where(incidents.c.incident_id == incident_id)
+            .limit(1)
+        ).mappings().first()
+    return dict(updated_row)
+
+
+def add_incident_note(incident_id: str, author: str, note: str) -> dict:
+    text = str(note).strip()
+    if not text:
+        raise ValueError("note must not be empty")
+    if len(text) > 4000:
+        raise ValueError("note must be 4000 characters or fewer")
+
+    with _get_engine().begin() as conn:
+        exists = conn.execute(
+            select(incidents.c.incident_id)
+            .where(incidents.c.incident_id == incident_id)
+            .limit(1)
+        ).first()
+        if exists is None:
+            raise KeyError("incident not found")
+
+        result = conn.execute(
+            incident_notes.insert().values(
+                incident_id=incident_id,
+                author=author,
+                note=text,
+            )
+        )
+        note_id = result.inserted_primary_key[0]
+        conn.execute(
+            incident_audit.insert().values(
+                incident_id=incident_id,
+                actor=author,
+                action="note_added",
+                details={"note_id": note_id},
+            )
+        )
+        row = conn.execute(
+            select(incident_notes)
+            .where(incident_notes.c.id == note_id)
+            .limit(1)
+        ).mappings().first()
+    return dict(row)
+
+
+def get_incident_notes(incident_id: str) -> list[dict]:
+    with _get_engine().connect() as conn:
+        rows = conn.execute(
+            select(incident_notes)
+            .where(incident_notes.c.incident_id == incident_id)
+            .order_by(incident_notes.c.id.asc())
+        ).mappings().all()
+    return [dict(row) for row in rows]
+
+
+def get_incident_audit(incident_id: str) -> list[dict]:
+    with _get_engine().connect() as conn:
+        rows = conn.execute(
+            select(incident_audit)
+            .where(incident_audit.c.incident_id == incident_id)
+            .order_by(incident_audit.c.id.asc())
+        ).mappings().all()
+    return [dict(row) for row in rows]
+
+
+def create_or_get_incident(
+    *,
+    fingerprint: str,
+    incident_id: str,
+    event_id: str,
+    severity: str,
+    source_ip: str,
+    risk_score: float,
+    summary: str,
+) -> tuple[str, bool]:
+    """Atomically create the fingerprint and incident, or return its existing incident."""
+    try:
+        with _get_engine().begin() as conn:
+            conn.execute(
+                incident_fingerprints.insert().values(
+                    fingerprint=fingerprint,
+                    incident_id=incident_id,
+                )
+            )
+            conn.execute(
+                incidents.insert().values(
+                    incident_id=incident_id,
+                    event_id=event_id,
+                    status="open",
+                    severity=severity,
+                    source_ip=source_ip,
+                    risk_score=float(risk_score),
+                    summary=summary,
+                )
+            )
+        return incident_id, False
+    except IntegrityError:
+        with _get_engine().connect() as conn:
+            existing = conn.execute(
+                select(incident_fingerprints.c.incident_id)
+                .where(incident_fingerprints.c.fingerprint == fingerprint)
+                .limit(1)
+            ).first()
+            if existing is not None:
+                return str(existing[0]), True
+
+            by_event = conn.execute(
+                select(incidents.c.incident_id)
+                .where(incidents.c.event_id == event_id)
+                .limit(1)
+            ).first()
+            if by_event is not None:
+                return str(by_event[0]), True
+        raise
