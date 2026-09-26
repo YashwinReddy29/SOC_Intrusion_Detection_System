@@ -36,7 +36,7 @@ jobs:
           python -m compileall -q app ml scripts tests
 
       - name: Ruff
-        run: ruff check app ml scripts tests run.py
+        run: ruff check --select E4,E7,E9,F app ml scripts tests run.py
 
       - name: Bandit high-severity scan
         run: bandit -q -r app ml scripts --severity-level high
